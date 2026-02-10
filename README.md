@@ -2,6 +2,8 @@
 
 Автоматическая сортировка файлов для Linux и Windows.
 
+<img src="src/img.png" alt="Демонстрация работы">
+
 ## Установка
 
 ```bash
@@ -65,6 +67,10 @@ python file_sorter.py
 Запуск `run_cleanup.bat` и выбор режима.
 
 #### Способ 2: Командная строка
+```commandline
+python -m venv venv
+venv\Scripts\activate 
+```
 
 Тестовый режим (показ без перемещения):
 ```bash
