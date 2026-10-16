@@ -92,13 +92,13 @@ python one_time_cleanup.py
 
 ```python
 file_extensions = {
-    'image': ['jpg', 'png', 'gif'],  # добавить свои
-    'video': ['mp4', 'mkv', 'avi'],
+    "image": ["jpg", "png", "gif"],  # добавить свои
+    "video": ["mp4", "mkv", "avi"],
     # ...
 }
 
 destinations = {
-    "image": home_directory / "Pictures",      # изменить путь
+    "image": home_directory / "Pictures",  # изменить путь
     "video": home_directory / "Videos",
     # ...
 }
@@ -112,7 +112,7 @@ destinations = {
 Пример:
 ```python
 file_extensions = {
-    'my_category': ['ext1', 'ext2'],
+    "my_category": ["ext1", "ext2"],
 }
 
 destinations = {
