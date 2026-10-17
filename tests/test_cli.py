@@ -9,11 +9,41 @@ from file_sorter.sorter import Failed, Moved, Skipped, SkipReason
 from tests.conftest import make_files
 
 
-def test_no_arguments_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_arguments_prints_help(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "_is_interactive", lambda: False)
     assert main([]) == 0
     output = capsys.readouterr().out
     assert "clean" in output
     assert "watch" in output
+
+
+def test_no_arguments_runs_menu_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    make_files(tmp_path, "a.jpg")
+    monkeypatch.setattr(cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        cli.menu,
+        "ask_arguments",
+        lambda: ["clean", str(tmp_path), "--mode", "subfolders"],
+    )
+    assert main([]) == 0
+    assert (tmp_path / "Images" / "a.jpg").exists()
+    assert "Запускаю: file-sorter clean" in capsys.readouterr().out
+
+
+def test_menu_exit_does_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_files(tmp_path, "a.jpg")
+    monkeypatch.setattr(cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(cli.menu, "ask_arguments", lambda: None)
+    assert main([]) == 0
+    assert (tmp_path / "a.jpg").exists()
 
 
 class TestWatch:
@@ -131,6 +161,16 @@ class TestClean:
         assert (tmp_path / "a.jpg").exists()
         assert not (tmp_path / "Images").exists()
         assert "пробный" in capsys.readouterr().out.lower()
+
+    def test_dry_run_summary_says_will_be_moved(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg", "b.mp3", "x.unknown")
+        code = main(["clean", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        assert code == 0
+        output = capsys.readouterr().out
+        assert "Будет перемещено: 2" in output
+        assert "Перемещено: 2" not in output
 
     def test_target_implies_custom_mode(self, tmp_path: Path) -> None:
         source = tmp_path / "src"
