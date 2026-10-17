@@ -1,15 +1,19 @@
-"""Командная строка: file-sorter clean и file-sorter watch."""
+"""Командная строка: file-sorter clean, watch и service."""
 
 import argparse
+import signal
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
+from types import FrameType
 
 from file_sorter.config import Category, Config, ConfigError, load_config
 from file_sorter.folders import default_system_dirs
+from file_sorter.service import ServiceError, ServiceSpec, default_backend
 from file_sorter.sorter import (
     Failed,
     Mode,
@@ -38,8 +42,8 @@ _SKIP_TEXT = {
 }
 
 
-def _add_sort_arguments(parser: argparse.ArgumentParser) -> None:
-    """Общие параметры команд clean и watch."""
+def _add_sort_arguments(parser: argparse.ArgumentParser, *, dry_run: bool) -> None:
+    """Общие параметры команд clean, watch и service install."""
     parser.add_argument(
         "folder",
         nargs="?",
@@ -52,12 +56,26 @@ def _add_sort_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         help="куда раскладывать в режиме custom (само по себе включает его)",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="показать, что будет сделано, без перемещения файлов",
-    )
+    if dry_run:
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="показать, что будет сделано, без перемещения файлов",
+        )
     parser.add_argument("--config", type=Path, help="файл конфига категорий (TOML)")
+
+
+def _add_settle_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--settle",
+        type=float,
+        default=DEFAULT_SETTLE,
+        metavar="СЕКУНДЫ",
+        help=(
+            "сколько секунд файл не должен меняться, чтобы его сортировать "
+            f"(по умолчанию {DEFAULT_SETTLE:g})"
+        ),
+    )
 
 
 def build_parser() -> tuple[
@@ -75,7 +93,7 @@ def build_parser() -> tuple[
         help="одноразовая сортировка папки",
         description="Одноразовая сортировка файлов в папке (без вложенных папок).",
     )
-    _add_sort_arguments(clean)
+    _add_sort_arguments(clean, dry_run=True)
 
     watch = subparsers.add_parser(
         "watch",
@@ -86,18 +104,40 @@ def build_parser() -> tuple[
             "Остановка: Ctrl+C."
         ),
     )
-    _add_sort_arguments(watch)
+    _add_sort_arguments(watch, dry_run=True)
+    _add_settle_argument(watch)
     watch.add_argument(
-        "--settle",
-        type=float,
-        default=DEFAULT_SETTLE,
-        metavar="СЕКУНДЫ",
-        help=(
-            "сколько секунд файл не должен меняться, чтобы его сортировать "
-            f"(по умолчанию {DEFAULT_SETTLE:g})"
+        "--log-file",
+        type=Path,
+        help="писать весь вывод в этот файл (для работы в фоне)",
+    )
+
+    service = subparsers.add_parser(
+        "service",
+        help="автозапуск: установка и управление фоновой службой слежения",
+        description=(
+            "Фоновая служба следит за папкой сама: запускается при входе в систему "
+            "(Linux: systemd, Windows: Планировщик заданий)."
         ),
     )
-    return parser, {"clean": clean, "watch": watch}
+    actions = service.add_subparsers(dest="action", metavar="ДЕЙСТВИЕ", required=True)
+    install = actions.add_parser(
+        "install",
+        help="установить службу и запустить её",
+        description=(
+            "Устанавливает службу, которая выполняет file-sorter watch с этими "
+            "параметрами, и сразу запускает её. Окружение (папка проекта или "
+            "установка через uv tool install) должно сохраняться."
+        ),
+    )
+    _add_sort_arguments(install, dry_run=False)
+    _add_settle_argument(install)
+    actions.add_parser("start", help="запустить службу")
+    actions.add_parser("stop", help="остановить службу (автозапуск остаётся)")
+    actions.add_parser("status", help="показать состояние службы")
+    actions.add_parser("uninstall", help="остановить службу и убрать автозапуск")
+
+    return parser, {"clean": clean, "watch": watch, "service install": install}
 
 
 def _moved_text(moved: Moved, *, dry_run: bool) -> str:
@@ -152,6 +192,11 @@ def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool)
     return 1 if report.failed else 0
 
 
+def _raise_interrupt(signum: int, frame: FrameType | None) -> None:
+    """SIGTERM (так службу останавливает systemd) работает как Ctrl+C."""
+    raise KeyboardInterrupt
+
+
 def _do_watch(
     source: Path,
     config: Config,
@@ -160,33 +205,52 @@ def _do_watch(
     dry_run: bool,
     settle: float,
 ) -> int:
-    print(f"Слежение запущено (файл должен не меняться {settle:g} с). Ctrl+C - стоп.")
-    sys.stdout.flush()
+    previous = signal.signal(signal.SIGTERM, _raise_interrupt)
     try:
-        watch_folder(
-            source,
-            config,
-            resolve,
-            settle=settle,
-            dry_run=dry_run,
-            on_result=partial(_print_event, dry_run=dry_run),
-            stop=threading.Event(),
+        print(
+            f"Слежение запущено (файл должен не меняться {settle:g} с). Ctrl+C - стоп.",
+            flush=True,
         )
-    except KeyboardInterrupt:
-        print("\nОстановлено.")
+        try:
+            watch_folder(
+                source,
+                config,
+                resolve,
+                settle=settle,
+                dry_run=dry_run,
+                on_result=partial(_print_event, dry_run=dry_run),
+                stop=threading.Event(),
+            )
+        except KeyboardInterrupt:
+            print("\nОстановлено.", flush=True)
+            return 0
+        except OSError as error:
+            print(f"Ошибка: {error}", file=sys.stderr)
+            return 2
         return 0
-    except OSError as error:
-        print(f"Ошибка: {error}", file=sys.stderr)
-        return 2
-    return 0
+    finally:
+        signal.signal(
+            signal.SIGTERM, previous if previous is not None else signal.SIG_DFL
+        )
 
 
-def _run_command(
-    args: argparse.Namespace,
-    parser: argparse.ArgumentParser,
-    action: Callable[[Path, Config, Resolver], int],
-) -> int:
-    """Общая часть команд: режим, конфиг, папки, затем action."""
+@contextmanager
+def _output_to(log_file: Path | None) -> Iterator[None]:
+    """Направляет весь вывод программы в файл (без окна консоли его не видно)."""
+    if log_file is None:
+        yield
+        return
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    original = sys.stdout, sys.stderr
+    with log_file.open("a", encoding="utf-8", buffering=1) as stream:
+        sys.stdout = sys.stderr = stream
+        try:
+            yield
+        finally:
+            sys.stdout, sys.stderr = original
+
+
+def _resolve_mode(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Mode:
     if args.mode is not None:
         mode = Mode(args.mode)
     else:
@@ -195,7 +259,16 @@ def _run_command(
         parser.error("режим custom требует --target")
     if mode is not Mode.CUSTOM and args.target is not None:
         parser.error("--target работает только в режиме custom")
+    return mode
 
+
+def _run_command(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    action: Callable[[Path, Config, Resolver], int],
+) -> int:
+    """Общая часть команд: режим, конфиг, папки, затем action."""
+    mode = _resolve_mode(args, parser)
     try:
         config = load_config(args.config)
     except ConfigError as error:
@@ -218,18 +291,80 @@ def _run_command(
     return action(source, config, resolve)
 
 
+def _prepare_install(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> ServiceSpec | None:
+    """Проверяет параметры службы и собирает её команду; None - если нельзя.
+
+    Пути делаем абсолютными: у службы другая рабочая папка.
+    """
+    mode = _resolve_mode(args, parser)
+    if args.settle < 0:
+        parser.error("--settle не может быть отрицательным")
+    try:
+        load_config(args.config)
+    except ConfigError as error:
+        print(f"Ошибка конфига: {error}", file=sys.stderr)
+        return None
+
+    if args.folder is not None:
+        folder = args.folder.expanduser().resolve()
+    else:
+        folder = default_system_dirs()["downloads"]
+    if not folder.is_dir():
+        print(f"Ошибка: папка не найдена: {folder}", file=sys.stderr)
+        return None
+
+    watch_args: list[str] = []
+    if args.folder is not None:
+        watch_args.append(str(folder))
+    watch_args += ["--mode", mode.value, "--settle", f"{args.settle:g}"]
+    if args.target is not None:
+        watch_args += ["--target", str(args.target.expanduser().resolve())]
+    if args.config is not None:
+        watch_args += ["--config", str(args.config.expanduser().resolve())]
+    return ServiceSpec(Path(sys.executable), tuple(watch_args))
+
+
+def _run_service(args: argparse.Namespace, install: argparse.ArgumentParser) -> int:
+    try:
+        backend = default_backend()
+        if args.action == "install":
+            spec = _prepare_install(args, install)
+            if spec is None:
+                return 2
+            message = backend.install(spec)
+        else:
+            controls = {
+                "uninstall": backend.uninstall,
+                "start": backend.start,
+                "stop": backend.stop,
+                "status": backend.status,
+            }
+            message = controls[args.action]()
+    except ServiceError as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(message)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Точка входа. Коды выхода: 0 - успех, 1 - были ошибки, 2 - неверный запуск."""
     parser, commands = build_parser()
     args = parser.parse_args(argv)
     match args.command:
         case "clean":
-            action = partial(_do_clean, dry_run=args.dry_run)
+            clean = partial(_do_clean, dry_run=args.dry_run)
+            return _run_command(args, commands["clean"], clean)
         case "watch":
             if args.settle < 0:
                 commands["watch"].error("--settle не может быть отрицательным")
-            action = partial(_do_watch, dry_run=args.dry_run, settle=args.settle)
+            watch = partial(_do_watch, dry_run=args.dry_run, settle=args.settle)
+            with _output_to(args.log_file):
+                return _run_command(args, commands["watch"], watch)
+        case "service":
+            return _run_service(args, commands["service install"])
         case _:
             parser.print_help()
             return 0
-    return _run_command(args, commands[args.command], action)
