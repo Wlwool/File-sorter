@@ -79,6 +79,41 @@ def unique_destination(
         counter += 1
 
 
+type SortResult = Moved | Skipped | Failed
+
+
+def sort_file(
+    path: Path,
+    config: Config,
+    resolve: Callable[[Category], Path],
+    *,
+    dry_run: bool = False,
+    reserved: set[Path] | None = None,
+) -> SortResult:
+    """Сортирует один файл.
+    reserved - имена, уже занятые в этом запуске: пополняется, чтобы пробный
+    запуск (dry_run) выдавал те же имена, что и настоящий.
+    """
+    category = config.category_for(path.name)
+    if category is None:
+        return Skipped(path, SkipReason.UNKNOWN_TYPE)
+
+    directory = resolve(category)
+    if directory.resolve() == path.parent.resolve():
+        return Skipped(path, SkipReason.ALREADY_IN_PLACE)
+
+    taken = reserved if reserved is not None else set()
+    destination = unique_destination(directory, path.name, taken)
+    taken.add(destination)
+    if not dry_run:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            shutil.move(path, destination)
+        except OSError as error:
+            return Failed(path, str(error))
+    return Moved(path, destination, category.key)
+
+
 def sort_folder(
     source: Path,
     config: Config,
@@ -95,24 +130,12 @@ def sort_folder(
     for path in sorted(source.iterdir()):
         if not path.is_file():
             continue
-        category = config.category_for(path.name)
-        if category is None:
-            report.skipped.append(Skipped(path, SkipReason.UNKNOWN_TYPE))
-            continue
-
-        directory = resolve(category)
-        if directory.resolve() == path.parent.resolve():
-            report.skipped.append(Skipped(path, SkipReason.ALREADY_IN_PLACE))
-            continue
-
-        destination = unique_destination(directory, path.name, reserved)
-        reserved.add(destination)
-        if not dry_run:
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-                shutil.move(path, destination)
-            except OSError as error:
-                report.failed.append(Failed(path, str(error)))
-                continue
-        report.moved.append(Moved(path, destination, category.key))
+        result = sort_file(path, config, resolve, dry_run=dry_run, reserved=reserved)
+        match result:
+            case Moved():
+                report.moved.append(result)
+            case Skipped():
+                report.skipped.append(result)
+            case Failed():
+                report.failed.append(result)
     return report
