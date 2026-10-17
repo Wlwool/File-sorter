@@ -349,8 +349,17 @@ def _run_service(args: argparse.Namespace, install: argparse.ArgumentParser) -> 
     return 0
 
 
+def _use_utf8_output() -> None:
+    """Выводит текст в UTF-8 на Windows"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Точка входа. Коды выхода: 0 - успех, 1 - были ошибки, 2 - неверный запуск."""
+    _use_utf8_output()
     parser, commands = build_parser()
     args = parser.parse_args(argv)
     match args.command:

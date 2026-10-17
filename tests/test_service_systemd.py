@@ -105,7 +105,9 @@ class TestInstall:
         backend = SystemdBackend(FakeRunner(), directory=tmp_path / "units")
         backend.install(make_spec(tmp_path))
         text = (tmp_path / "units" / SERVICE_NAME).read_text(encoding="utf-8")
-        assert f'"{sys.executable}" "-m" "file_sorter" "watch" "--mode"' in text
+        assert (
+            f'{quote_arg(sys.executable)} "-m" "file_sorter" "watch" "--mode"' in text
+        )
 
     def test_without_systemctl_gives_manual_steps(self, tmp_path: Path) -> None:
         backend = SystemdBackend(FakeRunner(missing=True), directory=tmp_path / "u")
