@@ -1,15 +1,113 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from file_sorter import cli
+from file_sorter import cli, watcher
 from file_sorter.cli import main
+from file_sorter.sorter import Failed, Moved, Skipped, SkipReason
 from tests.conftest import make_files
 
 
 def test_no_arguments_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
-    assert "clean" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "clean" in output
+    assert "watch" in output
+
+
+class TestWatch:
+    @pytest.fixture
+    def calls(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Подменяет цикл слежения и запоминает, с чем его вызвали."""
+        recorded: list[dict[str, Any]] = []
+
+        def fake(source: Path, config: Any, resolve: Any, **kwargs: Any) -> None:
+            recorded.append({"source": source, "resolve": resolve, **kwargs})
+
+        monkeypatch.setattr(cli, "watch_folder", fake)
+        return recorded
+
+    def test_passes_arguments(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        args = ["watch", str(tmp_path), "--mode", "subfolders", "--settle", "0.5"]
+        assert main([*args, "--dry-run"]) == 0
+        assert calls[0]["source"] == tmp_path
+        assert calls[0]["settle"] == 0.5
+        assert calls[0]["dry_run"] is True
+
+    def test_default_settle(self, tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+        assert main(["watch", str(tmp_path), "--mode", "subfolders"]) == 0
+        assert calls[0]["settle"] == watcher.DEFAULT_SETTLE
+        assert calls[0]["dry_run"] is False
+
+    def test_default_folder_is_downloads(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        calls: list[dict[str, Any]],
+    ) -> None:
+        dirs = {
+            name: tmp_path / name
+            for name in ("documents", "downloads", "music", "pictures", "videos")
+        }
+        monkeypatch.setattr(cli, "default_system_dirs", lambda: dirs)
+        assert main(["watch"]) == 0
+        assert calls[0]["source"] == dirs["downloads"]
+
+    def test_negative_settle_is_usage_error(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["watch", str(tmp_path), "--mode", "subfolders", "--settle", "-1"])
+        assert info.value.code == 2
+        assert not calls
+
+    def test_custom_mode_without_target_is_usage_error(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["watch", str(tmp_path), "--mode", "custom"])
+        assert info.value.code == 2
+        assert not calls
+
+    def test_ctrl_c_stops_cleanly(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def interrupted(*args: Any, **kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(cli, "watch_folder", interrupted)
+        assert main(["watch", str(tmp_path), "--mode", "subfolders"]) == 0
+        assert "Остановлено" in capsys.readouterr().out
+
+    def test_missing_folder(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        missing = tmp_path / "nope"
+        assert main(["watch", str(missing), "--mode", "subfolders"]) == 2
+        assert "nope" in capsys.readouterr().err
+
+    def test_prints_moves_and_failures_but_not_skips(
+        self,
+        tmp_path: Path,
+        calls: list[dict[str, Any]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        main(["watch", str(tmp_path), "--mode", "subfolders"])
+        capsys.readouterr()
+        on_result = calls[0]["on_result"]
+        on_result(Moved(tmp_path / "a.jpg", tmp_path / "Images" / "a.jpg", "image"))
+        on_result(Skipped(tmp_path / "skipme.xyz", SkipReason.UNKNOWN_TYPE))
+        on_result(Failed(tmp_path / "bad.jpg", "нет доступа"))
+        captured = capsys.readouterr()
+        assert "a.jpg" in captured.out
+        assert "skipme.xyz" not in captured.out
+        assert "bad.jpg" in captured.err
 
 
 class TestClean:
