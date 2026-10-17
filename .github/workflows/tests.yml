@@ -32,3 +32,12 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -q
+
+      - name: Launcher (Linux)
+        if: runner.os == 'Linux'
+        run: ./run.sh --help
+
+      - name: Launcher (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: run.bat --help
