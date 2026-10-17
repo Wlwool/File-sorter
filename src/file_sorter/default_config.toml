@@ -1,0 +1,96 @@
+# Встроенный конфиг категорий.
+#
+# Свой конфиг кладётся в файл config.toml в папке настроек пользователя
+# (путь можно задать флагом --config). Он ЗАМЕНЯЕТ встроенный целиком,
+# поэтому проще всего скопировать этот файл и править копию.
+#
+# Поля категории:
+#   folder         имя папки в режимах subfolders и custom
+#   system_dir     системная папка для режима system:
+#                  documents, downloads, music, pictures, videos
+#   system_subdir  подпапка внутри системной папки (необязательно)
+#   extensions     расширения без точки; одно расширение - одна категория
+
+[categories.image]
+folder = "Images"
+system_dir = "pictures"
+extensions = [
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico", "tif", "tiff",
+    "ai", "psd", "ps", "raw", "cr2", "nef", "orf", "sr2",
+]
+
+[categories.video]
+folder = "Video"
+system_dir = "videos"
+extensions = [
+    "mp4", "mov", "avi", "mkv", "wmv", "3gp", "3g2", "mpg", "mpeg", "m4v",
+    "h264", "flv", "rm", "swf", "vob", "webm", "ogv", "ts", "mts", "m2ts",
+    "divx",
+]
+
+[categories.audio]
+folder = "Audio"
+system_dir = "music"
+extensions = [
+    "mp3", "wav", "ogg", "flac", "aif", "mid", "midi", "mpa", "wma", "wpl",
+    "cda", "aac", "m4a", "opus", "ape", "alac",
+]
+
+[categories.documents]
+folder = "Documents"
+system_dir = "documents"
+extensions = [
+    "pdf", "txt", "doc", "docx", "rtf", "tex", "wpd", "odt", "xlsx", "xls",
+    "xlsm", "ods", "ppt", "pptx", "odp", "csv", "xml", "json", "md",
+]
+
+[categories.archive]
+folder = "Archives"
+system_dir = "documents"
+system_subdir = "Archives"
+extensions = [
+    "zip", "rar", "7z", "z", "gz", "rpm", "arj", "pkg", "deb", "tar", "bz2",
+    "xz", "iso", "dmg", "cab",
+]
+
+[categories.code]
+folder = "Code"
+system_dir = "documents"
+system_subdir = "Code"
+extensions = [
+    "py", "js", "java", "cpp", "c", "h", "cs", "php", "rb", "go", "rs",
+    "swift", "kt", "html", "css", "scss", "sass", "jsx", "tsx", "vue", "sql",
+    "sh", "bat", "ps1",
+]
+
+[categories.executable]
+folder = "Programs"
+system_dir = "downloads"
+system_subdir = "Programs"
+extensions = ["exe", "msi", "app", "apk", "jar", "dll", "sys"]
+
+[categories.ebooks]
+folder = "Ebooks"
+system_dir = "documents"
+system_subdir = "Ebooks"
+extensions = ["epub", "mobi", "azw", "azw3", "fb2", "djvu"]
+
+[categories.data]
+folder = "Data"
+system_dir = "documents"
+system_subdir = "Data"
+extensions = [
+    "sqlite", "sqlite3", "db", "dbf", "mdb", "accdb", "dat", "log", "sav",
+]
+
+[categories.fonts]
+folder = "Fonts"
+system_dir = "documents"
+system_subdir = "Fonts"
+extensions = ["ttf", "otf", "woff", "woff2", "eot", "fon"]
+
+[categories.cad]
+folder = "CAD"
+system_dir = "documents"
+system_subdir = "CAD"
+extensions = ["3ds", "dwg", "dxf", "step", "stp", "iges", "igs", "stl", "obj"]
