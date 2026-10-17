@@ -1,6 +1,7 @@
 """Командная строка: file-sorter clean, watch и service."""
 
 import argparse
+import shlex
 import signal
 import sys
 import threading
@@ -11,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from types import FrameType
 
+from file_sorter import menu
 from file_sorter.config import Category, Config, ConfigError, load_config
 from file_sorter.folders import default_system_dirs
 from file_sorter.service import ServiceError, ServiceSpec, default_backend
@@ -357,6 +359,11 @@ def _use_utf8_output() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _is_interactive() -> bool:
+    """Меню показывает только человеку у терминала, а не скрипту или службе."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Точка входа. Коды выхода: 0 - успех, 1 - были ошибки, 2 - неверный запуск."""
     _use_utf8_output()
@@ -375,5 +382,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         case "service":
             return _run_service(args, commands["service install"])
         case _:
+            if _is_interactive():
+                chosen = menu.ask_arguments()
+                if chosen is None:
+                    return 0
+                print(f"\nЗапускаю: file-sorter {shlex.join(chosen)}\n")
+                return main(chosen)
             parser.print_help()
             return 0

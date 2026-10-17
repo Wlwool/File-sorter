@@ -9,11 +9,41 @@ from file_sorter.sorter import Failed, Moved, Skipped, SkipReason
 from tests.conftest import make_files
 
 
-def test_no_arguments_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_arguments_prints_help(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "_is_interactive", lambda: False)
     assert main([]) == 0
     output = capsys.readouterr().out
     assert "clean" in output
     assert "watch" in output
+
+
+def test_no_arguments_runs_menu_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    make_files(tmp_path, "a.jpg")
+    monkeypatch.setattr(cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        cli.menu,
+        "ask_arguments",
+        lambda: ["clean", str(tmp_path), "--mode", "subfolders"],
+    )
+    assert main([]) == 0
+    assert (tmp_path / "Images" / "a.jpg").exists()
+    assert "Запускаю: file-sorter clean" in capsys.readouterr().out
+
+
+def test_menu_exit_does_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_files(tmp_path, "a.jpg")
+    monkeypatch.setattr(cli, "_is_interactive", lambda: True)
+    monkeypatch.setattr(cli.menu, "ask_arguments", lambda: None)
+    assert main([]) == 0
+    assert (tmp_path / "a.jpg").exists()
 
 
 class TestWatch:
