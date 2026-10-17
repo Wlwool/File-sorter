@@ -162,6 +162,16 @@ class TestClean:
         assert not (tmp_path / "Images").exists()
         assert "пробный" in capsys.readouterr().out.lower()
 
+    def test_dry_run_summary_says_will_be_moved(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg", "b.mp3", "x.unknown")
+        code = main(["clean", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        assert code == 0
+        output = capsys.readouterr().out
+        assert "Будет перемещено: 2" in output
+        assert "Перемещено: 2" not in output
+
     def test_target_implies_custom_mode(self, tmp_path: Path) -> None:
         source = tmp_path / "src"
         target = tmp_path / "out"

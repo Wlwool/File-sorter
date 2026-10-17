@@ -159,7 +159,8 @@ def _print_report(report: SortReport, *, dry_run: bool) -> None:
         return sum(1 for item in report.skipped if item.reason is reason)
 
     print()
-    print(f"Перемещено: {len(report.moved)}")
+    moved_label = "Будет перемещено" if dry_run else "Перемещено"
+    print(f"{moved_label}: {len(report.moved)}")
     print(f"Пропущено (неизвестный тип): {skipped_count(SkipReason.UNKNOWN_TYPE)}")
     print(f"Пропущено (уже на месте): {skipped_count(SkipReason.ALREADY_IN_PLACE)}")
     print(f"Ошибок: {len(report.failed)}")
