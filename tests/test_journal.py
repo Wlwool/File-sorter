@@ -155,3 +155,16 @@ def test_record_moves_writes_nothing_when_all_vanished(
     journal.record_moves([Moved(tmp_path / "a.jpg", tmp_path / "gone.jpg", "image")])
     assert journal.load_runs() == []
     assert not journal_file.exists()
+
+
+def test_record_moves_stores_absolute_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, journal_file: Path
+) -> None:
+    (tmp_path / "Images").mkdir()
+    (tmp_path / "Images" / "a.jpg").write_text("abc", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    journal.record_moves([Moved(Path("a.jpg"), Path("Images") / "a.jpg", "image")])
+    (run,) = journal.load_runs()
+    (entry,) = run.entries
+    assert entry.original == Path.cwd() / "a.jpg"
+    assert entry.current == Path.cwd() / "Images" / "a.jpg"
