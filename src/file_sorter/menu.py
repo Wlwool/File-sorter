@@ -13,6 +13,7 @@ _MAIN_MENU = """\
   2. Показать, что будет сделано (файлы не трогаем)
   3. Следить за папкой и разбирать новые файлы
   4. Служба: работать в фоне при каждом входе в систему
+  5. Отменить последнюю сортировку
   0. Выход
 """
 
@@ -37,6 +38,11 @@ _INSTALL_WARNING = (
     "Служба запоминает, откуда запущена программа. Если вы запускали её через "
     "uv run или uvx, сначала установите её командой uv tool install, иначе "
     "служба перестанет работать."
+)
+
+_UNDO_WARNING = (
+    "Если запущена служба слежения, остановите её перед отменой "
+    "(file-sorter service stop): иначе она заново отсортирует возвращённые файлы."
 )
 
 _MODES = {"1": "system", "2": "subfolders", "3": "custom"}
@@ -99,7 +105,7 @@ def _ask_service(ask: Ask) -> list[str] | None:
 
 def _run(ask: Ask) -> list[str] | None:
     while True:
-        choice = _choose(ask, _MAIN_MENU, "01234")
+        choice = _choose(ask, _MAIN_MENU, ("0", "1", "2", "3", "4", "5"))
         match choice:
             case "0":
                 return None
@@ -110,10 +116,13 @@ def _run(ask: Ask) -> list[str] | None:
                 return ["clean", *options, "--dry-run"]
             case "3":
                 return ["watch", *_ask_sort_options(ask, "За какой папкой следить?")]
-            case _:
+            case "4":
                 arguments = _ask_service(ask)
                 if arguments is not None:
                     return arguments
+            case "5":
+                print(_UNDO_WARNING)
+                return ["undo"]
 
 
 def ask_arguments(ask: Ask = input) -> list[str] | None:
