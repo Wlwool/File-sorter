@@ -2,18 +2,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-import platformdirs
 import pytest
 
 from file_sorter import journal
-
-
-@pytest.fixture
-def journal_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Направляет каталог состояния во временную папку (его нет до записи)."""
-    state = tmp_path / "state"
-    monkeypatch.setattr(platformdirs, "user_state_dir", lambda *a, **k: str(state))
-    return state / "journal.jsonl"
+from file_sorter.sorter import Moved
 
 
 def make_entry(name: str = "a.jpg", size: int = 1, mtime_ns: int = 1) -> journal.Entry:
@@ -125,3 +117,41 @@ def test_no_leftover_files_after_write(journal_file: Path) -> None:
     journal.append_run([make_entry("b.jpg")])
     journal.pop_last_run()
     assert [path.name for path in journal_file.parent.iterdir()] == ["journal.jsonl"]
+
+
+def test_record_moves_takes_size_and_time_from_destination(
+    tmp_path: Path, journal_file: Path
+) -> None:
+    destination = tmp_path / "Images" / "a.jpg"
+    destination.parent.mkdir()
+    destination.write_text("abc", encoding="utf-8")
+    source = tmp_path / "a.jpg"
+    journal.record_moves([Moved(source, destination, "image")])
+    (run,) = journal.load_runs()
+    (entry,) = run.entries
+    assert entry.original == source
+    assert entry.current == destination
+    assert entry.size == 3
+    assert entry.mtime_ns == destination.stat().st_mtime_ns
+
+
+def test_record_moves_skips_vanished_destination(
+    tmp_path: Path, journal_file: Path
+) -> None:
+    kept = tmp_path / "kept.jpg"
+    kept.write_text("x", encoding="utf-8")
+    moves = [
+        Moved(tmp_path / "a.jpg", kept, "image"),
+        Moved(tmp_path / "b.jpg", tmp_path / "gone.jpg", "image"),
+    ]
+    journal.record_moves(moves)
+    (run,) = journal.load_runs()
+    assert [entry.current.name for entry in run.entries] == ["kept.jpg"]
+
+
+def test_record_moves_writes_nothing_when_all_vanished(
+    tmp_path: Path, journal_file: Path
+) -> None:
+    journal.record_moves([Moved(tmp_path / "a.jpg", tmp_path / "gone.jpg", "image")])
+    assert journal.load_runs() == []
+    assert not journal_file.exists()

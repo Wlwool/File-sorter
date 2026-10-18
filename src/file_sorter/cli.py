@@ -6,13 +6,13 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from types import FrameType
 
-from file_sorter import menu
+from file_sorter import journal, menu
 from file_sorter.config import Category, Config, ConfigError, load_config
 from file_sorter.folders import default_system_dirs
 from file_sorter.service import ServiceError, ServiceSpec, default_backend
@@ -184,6 +184,21 @@ def _print_event(result: SortResult, *, dry_run: bool) -> None:
             pass  # временные и неизвестные файлы в журнал не пишем
 
 
+def _remember(results: Iterable[SortResult], *, dry_run: bool) -> None:
+    """Записывает настоящие перемещения в журнал, чтобы их можно было отменить."""
+    if dry_run:
+        return
+    moves = [item for item in results if isinstance(item, Moved)]
+    try:
+        journal.record_moves(moves)
+    except OSError as error:
+        print(
+            f"Предупреждение: не удалось записать журнал перемещений ({error}). "
+            "Эту сортировку нельзя будет отменить командой undo.",
+            file=sys.stderr,
+        )
+
+
 def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool) -> int:
     try:
         report = sort_folder(source, config, resolve, dry_run=dry_run)
@@ -192,6 +207,7 @@ def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool)
         return 2
     print()
     _print_report(report, dry_run=dry_run)
+    _remember(report.moved, dry_run=dry_run)
     return 1 if report.failed else 0
 
 
@@ -222,6 +238,7 @@ def _do_watch(
                 settle=settle,
                 dry_run=dry_run,
                 on_result=partial(_print_event, dry_run=dry_run),
+                on_batch=partial(_remember, dry_run=dry_run),
                 stop=threading.Event(),
             )
         except KeyboardInterrupt:

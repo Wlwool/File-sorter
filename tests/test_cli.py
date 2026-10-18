@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from file_sorter import cli, watcher
+from file_sorter import cli, journal, watcher
 from file_sorter.cli import main
 from file_sorter.sorter import Failed, Moved, Skipped, SkipReason
 from tests.conftest import make_files
@@ -139,6 +139,44 @@ class TestWatch:
         assert "skipme.xyz" not in captured.out
         assert "bad.jpg" in captured.err
 
+    def test_batch_is_recorded_in_journal(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        make_files(tmp_path / "Images", "a.jpg")
+        main(["watch", str(tmp_path), "--mode", "subfolders"])
+        on_batch = calls[0]["on_batch"]
+        on_batch(
+            [
+                Moved(tmp_path / "a.jpg", tmp_path / "Images" / "a.jpg", "image"),
+                Skipped(tmp_path / "skipme.xyz", SkipReason.UNKNOWN_TYPE),
+                Failed(tmp_path / "bad.jpg", "нет доступа"),
+            ]
+        )
+        (run,) = journal.load_runs()
+        assert [entry.original.name for entry in run.entries] == ["a.jpg"]
+
+    def test_dry_run_batch_is_not_recorded(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        make_files(tmp_path / "Images", "a.jpg")
+        main(["watch", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        calls[0]["on_batch"](
+            [Moved(tmp_path / "a.jpg", tmp_path / "Images" / "a.jpg", "image")]
+        )
+        assert journal.load_runs() == []
+
+    def test_batch_without_moves_is_not_recorded(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        main(["watch", str(tmp_path), "--mode", "subfolders"])
+        calls[0]["on_batch"](
+            [
+                Skipped(tmp_path / "skipme.xyz", SkipReason.UNKNOWN_TYPE),
+                Failed(tmp_path / "bad.jpg", "нет доступа"),
+            ]
+        )
+        assert journal.load_runs() == []
+
 
 class TestClean:
     def test_subfolders_mode_moves_files(
@@ -250,3 +288,42 @@ class TestClean:
         code = main(["clean", str(tmp_path), "--mode", "subfolders"])
         assert code == 1
         assert "a.jpg" in capsys.readouterr().err
+
+    def test_records_moves_in_journal(self, tmp_path: Path) -> None:
+        make_files(tmp_path, "a.jpg", "b.mp3", "x.unknown")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        (run,) = journal.load_runs()
+        assert [entry.original.name for entry in run.entries] == ["a.jpg", "b.mp3"]
+        first = run.entries[0]
+        assert first.current == tmp_path / "Images" / "a.jpg"
+        assert first.size == first.current.stat().st_size
+
+    def test_dry_run_records_nothing(self, tmp_path: Path, journal_file: Path) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        assert journal.load_runs() == []
+        assert not journal_file.exists()
+
+    def test_nothing_moved_records_nothing(
+        self, tmp_path: Path, journal_file: Path
+    ) -> None:
+        make_files(tmp_path, "x.unknown")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        assert not journal_file.exists()
+
+    def test_journal_error_does_not_fail_the_sort(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def broken(entries: Any) -> None:
+            raise OSError("диск полон")
+
+        monkeypatch.setattr(journal, "append_run", broken)
+        make_files(tmp_path, "a.jpg")
+        assert main(["clean", str(tmp_path), "--mode", "subfolders"]) == 0
+        assert (tmp_path / "Images" / "a.jpg").exists()
+        err = capsys.readouterr().err
+        assert "журнал" in err
+        assert "диск полон" in err

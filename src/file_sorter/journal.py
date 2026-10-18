@@ -13,8 +13,9 @@ from pathlib import Path
 import platformdirs
 
 from file_sorter.config import APP_NAME
+from file_sorter.sorter import Moved
 
-MAX_RUNS = 50  # сколько последних запусков хранится, старые удаляются сами
+MAX_RUNS = 50  # сколько последних запусков хранится; старые удаляются сами
 JOURNAL_NAME = "journal.jsonl"
 
 
@@ -110,6 +111,23 @@ def append_run(entries: Iterable[Entry]) -> None:
     stamp = datetime.now(UTC).isoformat()
     runs = [*load_runs(), Run(stamp, items)]
     _write_runs(runs[-MAX_RUNS:])
+
+
+def record_moves(moves: Iterable[Moved]) -> None:
+    """Записывает перемещённые файлы как один запуск.
+    Размер и время изменения берутся у файла на новом месте. Файл, который
+    уже исчез, пропускается. Если не осталось ни одного, журнал не меняется.
+    """
+    entries: list[Entry] = []
+    for move in moves:
+        try:
+            info = move.destination.stat()
+        except OSError:
+            continue
+        entries.append(
+            Entry(move.source, move.destination, info.st_size, info.st_mtime_ns)
+        )
+    append_run(entries)
 
 
 def pop_last_run() -> Run | None:

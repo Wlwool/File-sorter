@@ -105,10 +105,14 @@ def watch(
     dry_run: bool = False,
     poll_interval: float = 0.5,
     started: threading.Event | None = None,
+    on_batch: Callable[[list[SortResult]], None] | None = None,
 ) -> None:
     """Следит за папкой, пока не выставлен stop или не прервано с клавиатуры.
     Сортирует только файлы, появившиеся после запуска. Вложенные папки
     не отслеживаются. started выставляется, когда слежение уже работает.
+    on_batch получает результаты одного прохода цикла (файлы, которые
+    созрели вместе). Вызывается и при прерывании, чтобы уже перемещённые
+    файлы не потерялись. Пустые проходы не передаются.
     """
     if not source.is_dir():
         raise NotADirectoryError(f"папка не найдена: {source}")
@@ -121,8 +125,15 @@ def watch(
         if started is not None:
             started.set()
         while not stop.is_set():
-            for path in tracker.ready():
-                on_result(sort_file(path, config, resolve, dry_run=dry_run))
+            batch: list[SortResult] = []
+            try:
+                for path in tracker.ready():
+                    result = sort_file(path, config, resolve, dry_run=dry_run)
+                    batch.append(result)
+                    on_result(result)
+            finally:
+                if batch and on_batch is not None:
+                    on_batch(batch)
             stop.wait(poll_interval)
     finally:
         observer.stop()

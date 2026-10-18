@@ -2,6 +2,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import platformdirs
 import pytest
 
 from file_sorter import config
@@ -14,6 +15,18 @@ def _isolated_user_config(
     """Тесты не должны зависеть от настоящего конфига пользователя."""
     missing = tmp_path_factory.mktemp("user_config") / "config.toml"
     monkeypatch.setattr(config, "user_config_path", lambda: missing)
+
+
+@pytest.fixture(autouse=True)
+def journal_file(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Журнал перемещений каждого теста лежит во временной папке.
+    Каталога состояния до первой записи нет, как у нового пользователя.
+    """
+    state = tmp_path_factory.mktemp("state_parent") / "state"
+    monkeypatch.setattr(platformdirs, "user_state_dir", lambda *a, **k: str(state))
+    return state / "journal.jsonl"
 
 
 def make_files(directory: Path, *names: str) -> None:
