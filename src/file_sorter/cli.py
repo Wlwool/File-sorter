@@ -6,13 +6,14 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import FrameType
 
-from file_sorter import menu
+from file_sorter import journal, menu
 from file_sorter.config import Category, Config, ConfigError, load_config
 from file_sorter.folders import default_system_dirs
 from file_sorter.service import ServiceError, ServiceSpec, default_backend
@@ -26,6 +27,12 @@ from file_sorter.sorter import (
     SortResult,
     resolve_destination,
     sort_folder,
+)
+from file_sorter.undo import (
+    Restored,
+    UndoReport,
+    UndoSkipReason,
+    undo_run,
 )
 from file_sorter.watcher import DEFAULT_SETTLE
 from file_sorter.watcher import watch as watch_folder
@@ -41,6 +48,11 @@ _MODE_HELP = (
 _SKIP_TEXT = {
     SkipReason.UNKNOWN_TYPE: "неизвестный тип",
     SkipReason.ALREADY_IN_PLACE: "уже на месте",
+}
+
+_UNDO_SKIP_TEXT = {
+    UndoSkipReason.MISSING: "файла нет на месте, возможно, удалён или перемещён",
+    UndoSkipReason.CHANGED: "файл изменён после сортировки",
 }
 
 
@@ -139,6 +151,15 @@ def build_parser() -> tuple[
     actions.add_parser("status", help="показать состояние службы")
     actions.add_parser("uninstall", help="остановить службу и убрать автозапуск")
 
+    subparsers.add_parser(
+        "undo",
+        help="отменить последнюю сортировку",
+        description=(
+            "Возвращает файлы последней сортировки на прежние места. "
+            "Повторный запуск отменяет предыдущую сортировку."
+        ),
+    )
+
     return parser, {"clean": clean, "watch": watch, "service install": install}
 
 
@@ -184,6 +205,21 @@ def _print_event(result: SortResult, *, dry_run: bool) -> None:
             pass  # временные и неизвестные файлы в журнал не пишем
 
 
+def _remember(results: Iterable[SortResult], *, dry_run: bool) -> None:
+    """Записывает настоящие перемещения в журнал, чтобы их можно было отменить."""
+    if dry_run:
+        return
+    moves = [item for item in results if isinstance(item, Moved)]
+    try:
+        journal.record_moves(moves)
+    except OSError as error:
+        print(
+            f"Предупреждение: не удалось записать журнал перемещений ({error}). "
+            "Эту сортировку нельзя будет отменить командой undo.",
+            file=sys.stderr,
+        )
+
+
 def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool) -> int:
     try:
         report = sort_folder(source, config, resolve, dry_run=dry_run)
@@ -192,6 +228,66 @@ def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool)
         return 2
     print()
     _print_report(report, dry_run=dry_run)
+    _remember(report.moved, dry_run=dry_run)
+    return 1 if report.failed else 0
+
+
+def _run_time_text(stamp: str) -> str:
+    """Время запуска из журнала в местном времени, нечитаемое - как есть."""
+    try:
+        return datetime.fromisoformat(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return stamp
+
+
+def _restored_text(item: Restored) -> str:
+    name = item.entry.original.name
+    if item.renamed:
+        return (
+            f"Возвращён под другим именем: {name} -> {item.destination.name} "
+            f"({name} уже существует)"
+        )
+    return f"Возвращён: {name} -> {item.entry.original.parent}"
+
+
+def _print_undo_report(report: UndoReport) -> None:
+    for restored in report.restored:
+        print(_restored_text(restored))
+    for skipped in report.skipped:
+        name = skipped.entry.original.name
+        print(f"Пропущен: {name} ({_UNDO_SKIP_TEXT[skipped.reason]})")
+    for failed in report.failed:
+        name = failed.entry.original.name
+        print(f"[X] Ошибка: {name}: {failed.message}", file=sys.stderr)
+    print()
+    print(f"Возвращено: {len(report.restored)}")
+    print(f"Пропущено: {len(report.skipped)}")
+    print(f"Ошибок: {len(report.failed)}")
+
+
+def _do_undo() -> int:
+    try:
+        runs = journal.load_runs()
+    except OSError as error:
+        print(f"Ошибка: не удалось прочитать журнал ({error})", file=sys.stderr)
+        return 2
+    if not runs:
+        print("Нечего отменять: журнал перемещений пуст.")
+        return 0
+
+    run = runs[-1]
+    when = _run_time_text(run.time)
+    print(f"Отменяю сортировку от {when} (файлов: {len(run.entries)})\n")
+    report = undo_run(run)
+    _print_undo_report(report)
+    try:
+        journal.pop_last_run()
+    except OSError as error:
+        print(
+            f"Предупреждение: не удалось обновить журнал ({error}). "
+            "Повторный undo попробует отменить эту сортировку ещё раз.",
+            file=sys.stderr,
+        )
     return 1 if report.failed else 0
 
 
@@ -222,6 +318,7 @@ def _do_watch(
                 settle=settle,
                 dry_run=dry_run,
                 on_result=partial(_print_event, dry_run=dry_run),
+                on_batch=partial(_remember, dry_run=dry_run),
                 stop=threading.Event(),
             )
         except KeyboardInterrupt:
@@ -382,6 +479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _run_command(args, commands["watch"], watch)
         case "service":
             return _run_service(args, commands["service install"])
+        case "undo":
+            return _do_undo()
         case _:
             if _is_interactive():
                 chosen = menu.ask_arguments()

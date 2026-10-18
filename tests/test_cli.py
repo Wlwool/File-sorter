@@ -1,9 +1,10 @@
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from file_sorter import cli, watcher
+from file_sorter import cli, journal, watcher
 from file_sorter.cli import main
 from file_sorter.sorter import Failed, Moved, Skipped, SkipReason
 from tests.conftest import make_files
@@ -139,6 +140,44 @@ class TestWatch:
         assert "skipme.xyz" not in captured.out
         assert "bad.jpg" in captured.err
 
+    def test_batch_is_recorded_in_journal(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        make_files(tmp_path / "Images", "a.jpg")
+        main(["watch", str(tmp_path), "--mode", "subfolders"])
+        on_batch = calls[0]["on_batch"]
+        on_batch(
+            [
+                Moved(tmp_path / "a.jpg", tmp_path / "Images" / "a.jpg", "image"),
+                Skipped(tmp_path / "skipme.xyz", SkipReason.UNKNOWN_TYPE),
+                Failed(tmp_path / "bad.jpg", "нет доступа"),
+            ]
+        )
+        (run,) = journal.load_runs()
+        assert [entry.original.name for entry in run.entries] == ["a.jpg"]
+
+    def test_dry_run_batch_is_not_recorded(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        make_files(tmp_path / "Images", "a.jpg")
+        main(["watch", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        calls[0]["on_batch"](
+            [Moved(tmp_path / "a.jpg", tmp_path / "Images" / "a.jpg", "image")]
+        )
+        assert journal.load_runs() == []
+
+    def test_batch_without_moves_is_not_recorded(
+        self, tmp_path: Path, calls: list[dict[str, Any]]
+    ) -> None:
+        main(["watch", str(tmp_path), "--mode", "subfolders"])
+        calls[0]["on_batch"](
+            [
+                Skipped(tmp_path / "skipme.xyz", SkipReason.UNKNOWN_TYPE),
+                Failed(tmp_path / "bad.jpg", "нет доступа"),
+            ]
+        )
+        assert journal.load_runs() == []
+
 
 class TestClean:
     def test_subfolders_mode_moves_files(
@@ -250,3 +289,207 @@ class TestClean:
         code = main(["clean", str(tmp_path), "--mode", "subfolders"])
         assert code == 1
         assert "a.jpg" in capsys.readouterr().err
+
+    def test_records_moves_in_journal(self, tmp_path: Path) -> None:
+        make_files(tmp_path, "a.jpg", "b.mp3", "x.unknown")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        (run,) = journal.load_runs()
+        assert [entry.original.name for entry in run.entries] == ["a.jpg", "b.mp3"]
+        first = run.entries[0]
+        assert first.current == tmp_path / "Images" / "a.jpg"
+        assert first.size == first.current.stat().st_size
+
+    def test_dry_run_records_nothing(self, tmp_path: Path, journal_file: Path) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders", "--dry-run"])
+        assert journal.load_runs() == []
+        assert not journal_file.exists()
+
+    def test_nothing_moved_records_nothing(
+        self, tmp_path: Path, journal_file: Path
+    ) -> None:
+        make_files(tmp_path, "x.unknown")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        assert not journal_file.exists()
+
+    def test_journal_error_does_not_fail_the_sort(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def broken(entries: Any) -> None:
+            raise OSError("диск полон")
+
+        monkeypatch.setattr(journal, "append_run", broken)
+        make_files(tmp_path, "a.jpg")
+        assert main(["clean", str(tmp_path), "--mode", "subfolders"]) == 0
+        assert (tmp_path / "Images" / "a.jpg").exists()
+        err = capsys.readouterr().err
+        assert "журнал" in err
+        assert "диск полон" in err
+
+
+class TestUndo:
+    def test_roundtrip(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg", "b.mp3", "x.unknown")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        output = capsys.readouterr().out
+        assert (tmp_path / "a.jpg").exists()
+        assert (tmp_path / "b.mp3").exists()
+        assert not (tmp_path / "Images" / "a.jpg").exists()
+        assert "(файлов: 2)" in output
+        assert "Возвращено: 2" in output
+        assert "Пропущено: 0" in output
+        assert journal.load_runs() == []
+
+    def test_works_from_another_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        make_files(tmp_path / "src", "a.jpg")
+        monkeypatch.chdir(tmp_path)
+        main(["clean", "src", "--mode", "subfolders"])
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        assert main(["undo"]) == 0
+        assert (tmp_path / "src" / "a.jpg").exists()
+
+    def test_empty_journal(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["undo"]) == 0
+        assert "Нечего отменять" in capsys.readouterr().out
+
+    def test_walks_back_one_run_at_a_time(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        first, second = tmp_path / "one", tmp_path / "two"
+        make_files(first, "a.jpg")
+        make_files(second, "b.jpg")
+        main(["clean", str(first), "--mode", "subfolders"])
+        main(["clean", str(second), "--mode", "subfolders"])
+        assert main(["undo"]) == 0
+        assert (second / "b.jpg").exists()
+        assert not (first / "a.jpg").exists()
+        assert main(["undo"]) == 0
+        assert (first / "a.jpg").exists()
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        assert "Нечего отменять" in capsys.readouterr().out
+
+    def test_occupied_name_is_reported(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        (tmp_path / "a.jpg").write_text("новый", encoding="utf-8")
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        output = capsys.readouterr().out
+        expected = (
+            "Возвращён под другим именем: a.jpg -> a_1.jpg (a.jpg уже существует)"
+        )
+        assert expected in output
+        assert (tmp_path / "a_1.jpg").exists()
+        assert (tmp_path / "a.jpg").read_text(encoding="utf-8") == "новый"
+
+    def test_missing_file_is_reported(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        (tmp_path / "Images" / "a.jpg").unlink()
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        output = capsys.readouterr().out
+        assert "Пропущен: a.jpg (файла нет на месте" in output
+        assert "Пропущено: 1" in output
+        assert "Возвращено: 0" in output
+
+    def test_changed_file_is_reported_and_kept(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        (tmp_path / "Images" / "a.jpg").write_text("изменён", encoding="utf-8")
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        assert "Пропущен: a.jpg (файл изменён после сортировки)" in (
+            capsys.readouterr().out
+        )
+        assert (tmp_path / "Images" / "a.jpg").exists()
+        assert not (tmp_path / "a.jpg").exists()
+
+    def test_failure_returns_one(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source, target = tmp_path / "src", tmp_path / "out"
+        make_files(source, "a.jpg")
+        main(["clean", str(source), "--target", str(target)])
+        source.rmdir()
+        source.write_text("теперь я файл", encoding="utf-8")
+        capsys.readouterr()
+        assert main(["undo"]) == 1
+        captured = capsys.readouterr()
+        assert "a.jpg" in captured.err
+        assert "Ошибок: 1" in captured.out
+        assert (target / "Images" / "a.jpg").exists()
+        assert journal.load_runs() == []
+
+    def test_journal_update_error_is_a_warning(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+
+        def broken() -> None:
+            raise OSError("диск полон")
+
+        monkeypatch.setattr(journal, "pop_last_run", broken)
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        assert (tmp_path / "a.jpg").exists()
+        err = capsys.readouterr().err
+        assert "журнал" in err
+        assert "диск полон" in err
+
+    def test_unreadable_time_is_printed_as_is(
+        self,
+        tmp_path: Path,
+        journal_file: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        make_files(tmp_path, "a.jpg")
+        main(["clean", str(tmp_path), "--mode", "subfolders"])
+        record = json.loads(journal_file.read_text(encoding="utf-8"))
+        record["time"] = "вчера"
+        journal_file.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        capsys.readouterr()
+        assert main(["undo"]) == 0
+        assert "от вчера" in capsys.readouterr().out
+        assert (tmp_path / "a.jpg").exists()
+
+    def test_unreadable_journal_returns_two(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def broken() -> None:
+            raise OSError("нет доступа")
+
+        monkeypatch.setattr(journal, "load_runs", broken)
+        assert main(["undo"]) == 2
+        assert "нет доступа" in capsys.readouterr().err
+
+    def test_help_lists_undo(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "_is_interactive", lambda: False)
+        main([])
+        assert "undo" in capsys.readouterr().out
