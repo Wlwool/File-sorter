@@ -74,6 +74,8 @@ def raising(error: type[BaseException], *answers: str) -> Callable[[str], str]:
         pytest.param(("4", "3"), ["service", "stop"], id="service-stop"),
         pytest.param(("4", "4"), ["service", "status"], id="service-status"),
         pytest.param(("4", "5"), ["service", "uninstall"], id="service-uninstall"),
+        pytest.param(("5",), ["undo"], id="undo"),
+        pytest.param(("4", "0", "5"), ["undo"], id="service-back-then-undo"),
         pytest.param(("4", "0", "0"), None, id="service-back-then-exit"),
         pytest.param(
             ("4", "0", "1", "", "1"),
@@ -108,3 +110,18 @@ def test_service_install_warns_about_uv_tool_install(
 ) -> None:
     menu.ask_arguments(scripted("4", "1", "", "1"))
     assert "uv tool install" in capsys.readouterr().out
+
+
+def test_undo_reminds_to_stop_the_service(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    menu.ask_arguments(scripted("5"))
+    assert "service stop" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("answer", ["", "12"], ids=["empty", "two-digits"])
+def test_main_menu_rejects_answers_that_are_not_one_item(
+    answer: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert menu.ask_arguments(scripted(answer, "0")) is None
+    assert "Нет такого пункта" in capsys.readouterr().out
