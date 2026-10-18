@@ -5,9 +5,13 @@
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)](#установка)
 
-<img src="docs/images/demo.png" alt="Демонстрация работы" width="700">
-
 Сортировщик файлов по папкам для Linux и Windows: картинки к картинкам, музыка к музыке, документы к документам. Работает разово, следит за папкой в реальном времени или живёт в фоне как служба. Любую сортировку можно отменить.
+
+---
+
+<img src="docs/images/demo-linux.png" alt="Демонстрация работы" width="700">
+
+---
 
 ## Возможности
 
