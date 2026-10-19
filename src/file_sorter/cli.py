@@ -151,16 +151,33 @@ def build_parser() -> tuple[
     actions.add_parser("status", help="показать состояние службы")
     actions.add_parser("uninstall", help="остановить службу и убрать автозапуск")
 
-    subparsers.add_parser(
+    undo = subparsers.add_parser(
         "undo",
-        help="отменить последнюю сортировку",
+        help="отменить сортировку (по умолчанию последнюю)",
         description=(
-            "Возвращает файлы последней сортировки на прежние места. "
-            "Повторный запуск отменяет предыдущую сортировку."
+            "Возвращает файлы сортировки на прежние места. Без номера отменяет "
+            "последнюю; повторный запуск отменяет предыдущую. Номер можно взять "
+            "из списка (--list): 1 - последняя, 2 - предыдущая и так далее."
         ),
     )
-
-    return parser, {"clean": clean, "watch": watch, "service install": install}
+    undo.add_argument(
+        "number",
+        nargs="?",
+        type=int,
+        metavar="НОМЕР",
+        help="номер сортировки из списка (по умолчанию 1, последняя)",
+    )
+    undo.add_argument(
+        "--list",
+        action="store_true",
+        help="показать сохранённые сортировки, ничего не отменяя",
+    )
+    return parser, {
+        "clean": clean,
+        "watch": watch,
+        "service install": install,
+        "undo": undo,
+    }
 
 
 def _moved_text(moved: Moved, *, dry_run: bool) -> str:
@@ -265,7 +282,23 @@ def _print_undo_report(report: UndoReport) -> None:
     print(f"Ошибок: {len(report.failed)}")
 
 
-def _do_undo() -> int:
+def _do_undo_list() -> int:
+    try:
+        runs = journal.load_runs()
+    except OSError as error:
+        print(f"Ошибка: не удалось прочитать журнал ({error})", file=sys.stderr)
+        return 2
+    if not runs:
+        print("Журнал перемещений пуст.")
+        return 0
+    print(f"Журнал перемещений (запусков: {len(runs)}):")
+    for number, run in enumerate(reversed(runs), start=1):
+        print(f"  {number}. {_run_time_text(run.time)}, файлов: {len(run.entries)}")
+    print("\nОтменить выбранную: file-sorter undo НОМЕР")
+    return 0
+
+
+def _do_undo(number: int) -> int:
     try:
         runs = journal.load_runs()
     except OSError as error:
@@ -274,14 +307,21 @@ def _do_undo() -> int:
     if not runs:
         print("Нечего отменять: журнал перемещений пуст.")
         return 0
+    if number > len(runs):
+        print(
+            f"Ошибка: нет сортировки с номером {number}: в журнале их "
+            f"{len(runs)}. Список: file-sorter undo --list",
+            file=sys.stderr,
+        )
+        return 2
 
-    run = runs[-1]
+    run = runs[-number]
     when = _run_time_text(run.time)
     print(f"Отменяю сортировку от {when} (файлов: {len(run.entries)})\n")
     report = undo_run(run)
     _print_undo_report(report)
     try:
-        journal.pop_last_run()
+        journal.pop_run(number)
     except OSError as error:
         print(
             f"Предупреждение: не удалось обновить журнал ({error}). "
@@ -480,7 +520,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         case "service":
             return _run_service(args, commands["service install"])
         case "undo":
-            return _do_undo()
+            if args.list:
+                if args.number is not None:
+                    commands["undo"].error("--list нельзя указывать вместе с номером")
+                return _do_undo_list()
+            number = 1 if args.number is None else args.number
+            if number < 1:
+                commands["undo"].error("номер сортировки должен быть больше нуля")
+            return _do_undo(number)
         case _:
             if _is_interactive():
                 chosen = menu.ask_arguments()
