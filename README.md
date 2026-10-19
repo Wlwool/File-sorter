@@ -135,6 +135,7 @@ file-sorter service uninstall
 Linux: служба оформлена как пользовательский unit `file-sorter.service` в `~/.config/systemd/user/`. Журнал: `journalctl --user -u file-sorter.service -f`. Чтобы служба запускалась при загрузке без входа в систему, один раз выполните `loginctl enable-linger`.
 
 Windows: служба оформлена как задание "File-sorter" в Планировщике, запускается при входе пользователя без окна консоли. Вывод пишется в файл журнала, его путь показывают `service install` и `service status`.
+Журнал службы: `C:\Users\<имя>\AppData\Local\file-sorter\Logs\file-sorter.log`. Файл в UTF-8, поэтому в Windows PowerShell читать его так: `Get-Content <путь> -Encoding UTF8`, иначе русский текст покажется нечитаемым.
 
 ### undo
 
@@ -193,7 +194,7 @@ file-sorter undo
 Свой конфиг полностью заменяет встроенный, поэтому проще всего скопировать `default_config.toml` и править копию. Файл ищется так:
 
 1. путь из `--config`, если задан
-2. `config.toml` в папке настроек пользователя (на Linux `~/.config/file-sorter/config.toml`)
+2. `config.toml` в папке настроек пользователя (Linux: `~/.config/file-sorter/config.toml`, Windows: `C:\Users\<имя>\AppData\Local\file-sorter\config.toml`)
 3. встроенный конфиг
 
 Пример своей категории:
@@ -219,7 +220,7 @@ extensions = ["jpg", "png"]
 Команда `undo` опирается на файл `journal.jsonl` в папке состояния пользователя:
 
 - Linux: `~/.local/state/file-sorter/journal.jsonl`
-- Windows: папка состояния приложения в `AppData\Local\file-sorter`
+- Windows: `C:\Users\<имя>\AppData\Local\file-sorter\journal.jsonl`
 
 В журнал попадают только настоящие перемещения, пробный запуск `--dry-run` ничего не пишет. Хранятся последние 50 запусков, более старые удаляются сами. Для `watch` один запуск журнала это пачка файлов, обработанная за один проход слежения.
 
