@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from file_sorter import config
-from file_sorter.config import ConfigError, load_config, parse_config
+from file_sorter.config import ConfigError, load_config, parse_config, user_config_path
 
 
 def one_category(**fields: object) -> dict[str, object]:
@@ -140,3 +140,18 @@ class TestLoadConfig:
     def test_default_is_used_without_user_config(self) -> None:
         keys = {category.key for category in load_config().categories}
         assert "video" in keys
+
+
+class TestUserConfigPath:
+    def test_asks_platformdirs_without_author_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[str, object]] = []
+
+        def fake(appname: str, appauthor: object = None) -> str:
+            calls.append((appname, appauthor))
+            return str(tmp_path)
+
+        monkeypatch.setattr(config.platformdirs, "user_config_dir", fake)
+        assert user_config_path() == tmp_path / "config.toml"
+        assert calls == [("file-sorter", False)]
