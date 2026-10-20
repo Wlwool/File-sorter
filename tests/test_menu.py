@@ -87,6 +87,22 @@ def raising(error: type[BaseException], *answers: str) -> Callable[[str], str]:
             ["service", "status"],
             id="bad-service-choice-asked-again",
         ),
+        pytest.param(("6", "1"), ["undo", "--list"], id="history-list"),
+        pytest.param(("6", "2", "3"), ["undo", "3"], id="history-undo-number"),
+        pytest.param(
+            ("6", "2", "0", "abc", "-1", "2"),
+            ["undo", "2"],
+            id="history-bad-number-asked-again",
+        ),
+        pytest.param(
+            ("6", "9", "1"), ["undo", "--list"], id="bad-history-choice-asked-again"
+        ),
+        pytest.param(("6", "0", "5"), ["undo"], id="history-back-then-undo"),
+        pytest.param(
+            ("6", "0", "1", "", "1"),
+            ["clean", "--mode", "system"],
+            id="history-back-then-clean",
+        ),
     ],
 )
 def test_ask_arguments(answers: tuple[str, ...], expected: list[str] | None) -> None:
@@ -96,8 +112,14 @@ def test_ask_arguments(answers: tuple[str, ...], expected: list[str] | None) -> 
 @pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
 @pytest.mark.parametrize(
     "answers",
-    [(), ("1", ""), ("4",)],
-    ids=["at-start", "at-mode-question", "in-service-menu"],
+    [(), ("1", ""), ("4",), ("6",), ("6", "2")],
+    ids=[
+        "at-start",
+        "at-mode-question",
+        "in-service-menu",
+        "in-history-menu",
+        "at-number-question",
+    ],
 )
 def test_interrupted_input_means_exit(
     error: type[BaseException], answers: tuple[str, ...]
@@ -125,3 +147,24 @@ def test_main_menu_rejects_answers_that_are_not_one_item(
 ) -> None:
     assert menu.ask_arguments(scripted(answer, "0")) is None
     assert "Нет такого пункта" in capsys.readouterr().out
+
+
+def test_history_undo_reminds_to_stop_the_service(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    menu.ask_arguments(scripted("6", "2", "1"))
+    assert "service stop" in capsys.readouterr().out
+
+
+def test_history_list_does_not_print_the_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    menu.ask_arguments(scripted("6", "1"))
+    assert "service stop" not in capsys.readouterr().out
+
+
+def test_history_bad_number_is_explained(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    menu.ask_arguments(scripted("6", "2", "0", "1"))
+    assert "Введите целое число" in capsys.readouterr().out
