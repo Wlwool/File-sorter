@@ -14,6 +14,7 @@ _MAIN_MENU = """\
   3. Следить за папкой и разбирать новые файлы
   4. Служба: работать в фоне при каждом входе в систему
   5. Отменить последнюю сортировку
+  6. История сортировок: список и отмена любой из них
   0. Выход
 """
 
@@ -24,6 +25,13 @@ _SERVICE_MENU = """\
   3. Остановить (автозапуск останется)
   4. Показать состояние
   5. Удалить (остановить и убрать автозапуск)
+  0. Назад
+"""
+
+_HISTORY_MENU = """\
+История сортировок:
+  1. Показать список сохранённых сортировок
+  2. Отменить сортировку по номеру из списка
   0. Назад
 """
 
@@ -103,9 +111,30 @@ def _ask_service(ask: Ask) -> list[str] | None:
     return ["service", _SERVICE_ACTIONS[choice]]
 
 
+def _ask_number(ask: Ask) -> str:
+    while True:
+        answer = ask("Номер сортировки (1 - последняя): ").strip()
+        if answer.isascii() and answer.isdigit() and int(answer) >= 1:
+            return str(int(answer))
+        print("Введите целое число от 1.")
+
+
+def _ask_history(ask: Ask) -> list[str] | None:
+    """Подменю истории. None - выбрано "Назад"."""
+    choice = _choose(ask, _HISTORY_MENU, ("0", "1", "2"))
+    match choice:
+        case "0":
+            return None
+        case "1":
+            return ["undo", "--list"]
+        case _:
+            print(_UNDO_WARNING)
+            return ["undo", _ask_number(ask)]
+
+
 def _run(ask: Ask) -> list[str] | None:
     while True:
-        choice = _choose(ask, _MAIN_MENU, ("0", "1", "2", "3", "4", "5"))
+        choice = _choose(ask, _MAIN_MENU, ("0", "1", "2", "3", "4", "5", "6"))
         match choice:
             case "0":
                 return None
@@ -123,6 +152,10 @@ def _run(ask: Ask) -> list[str] | None:
             case "5":
                 print(_UNDO_WARNING)
                 return ["undo"]
+            case "6":
+                arguments = _ask_history(ask)
+                if arguments is not None:
+                    return arguments
 
 
 def ask_arguments(ask: Ask = input) -> list[str] | None:

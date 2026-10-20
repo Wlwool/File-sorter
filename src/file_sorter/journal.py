@@ -136,10 +136,20 @@ def record_moves(moves: Iterable[Moved]) -> None:
     append_run(entries)
 
 
-def pop_last_run() -> Run | None:
-    """Достаёт последний запуск и убирает его из журнала; None, если пусто."""
+def pop_run(number: int) -> Run | None:
+    """Достаёт запуск по номеру и убирает его из журнала.
+    Номер считается от конца: 1 - последний, 2 - предыдущий и так далее.
+    None, если такого номера нет (журнал при этом не меняется).
+    """
     runs = load_runs()
-    if not runs:
+    if not 1 <= number <= len(runs):
         return None
-    _write_runs(runs[:-1])
-    return runs[-1]
+    index = len(runs) - number
+    run = runs[index]
+    _write_runs(runs[:index] + runs[index + 1 :])
+    return run
+
+
+def pop_last_run() -> Run | None:
+    """Достаёт последний запуск и убирает его из журнала. None, если пусто."""
+    return pop_run(1)

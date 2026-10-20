@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -448,10 +449,10 @@ class TestUndo:
         make_files(tmp_path, "a.jpg")
         main(["clean", str(tmp_path), "--mode", "subfolders"])
 
-        def broken() -> None:
+        def broken(number: int) -> None:
             raise OSError("диск полон")
 
-        monkeypatch.setattr(journal, "pop_last_run", broken)
+        monkeypatch.setattr(journal, "pop_run", broken)
         capsys.readouterr()
         assert main(["undo"]) == 0
         assert (tmp_path / "a.jpg").exists()
@@ -493,3 +494,108 @@ class TestUndo:
         monkeypatch.setattr(cli, "_is_interactive", lambda: False)
         main([])
         assert "undo" in capsys.readouterr().out
+
+
+@pytest.fixture
+def three_runs(tmp_path: Path) -> tuple[Path, ...]:
+    """Три сортировки подряд. В журнале (от старой к новой) 1, 2 и 3 файла."""
+    folders = tuple(tmp_path / name for name in ("one", "two", "three"))
+    names = (("a.jpg",), ("b.jpg", "b2.jpg"), ("c.jpg", "c2.jpg", "c3.jpg"))
+    for folder, files in zip(folders, names, strict=True):
+        make_files(folder, *files)
+        main(["clean", str(folder), "--mode", "subfolders"])
+    return folders
+
+
+class TestUndoByNumber:
+    def test_number_selects_run(
+        self, three_runs: tuple[Path, ...], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        one, two, three = three_runs
+        capsys.readouterr()
+        assert main(["undo", "2"]) == 0
+        assert "(файлов: 2)" in capsys.readouterr().out
+        assert (two / "b.jpg").exists()
+        assert (two / "b2.jpg").exists()
+        assert (one / "Images" / "a.jpg").exists()
+        assert (three / "Images" / "c.jpg").exists()
+        assert [len(run.entries) for run in journal.load_runs()] == [1, 3]
+
+    def test_number_one_is_the_last(self, three_runs: tuple[Path, ...]) -> None:
+        one, two, three = three_runs
+        assert main(["undo", "1"]) == 0
+        assert (three / "c3.jpg").exists()
+        assert (two / "Images" / "b.jpg").exists()
+        assert [len(run.entries) for run in journal.load_runs()] == [1, 2]
+
+    def test_oldest_run(self, three_runs: tuple[Path, ...]) -> None:
+        one, two, three = three_runs
+        assert main(["undo", "3"]) == 0
+        assert (one / "a.jpg").exists()
+        assert (two / "Images" / "b.jpg").exists()
+        assert [len(run.entries) for run in journal.load_runs()] == [2, 3]
+
+    def test_number_out_of_range(
+        self, three_runs: tuple[Path, ...], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        one, two, three = three_runs
+        capsys.readouterr()
+        assert main(["undo", "4"]) == 2
+        err = capsys.readouterr().err
+        assert "номером 4" in err
+        assert "их 3" in err
+        assert (one / "Images" / "a.jpg").exists()
+        assert [len(run.entries) for run in journal.load_runs()] == [1, 2, 3]
+
+    def test_number_with_empty_journal(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["undo", "1"]) == 0
+        assert "Нечего отменять" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("value", ["0", "-1"])
+    def test_number_below_one_is_usage_error(
+        self, value: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["undo", value])
+        assert info.value.code == 2
+        assert "больше нуля" in capsys.readouterr().err
+
+
+class TestUndoList:
+    def test_lists_runs_newest_first(
+        self, three_runs: tuple[Path, ...], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        capsys.readouterr()
+        assert main(["undo", "--list"]) == 0
+        output = capsys.readouterr().out
+        assert "запусков: 3" in output
+        row = r"^ +(\d+)\. \d{4}-\d{2}-\d{2} \d{2}:\d{2}, файлов: (\d+)$"
+        rows = re.findall(row, output, re.MULTILINE)
+        assert rows == [("1", "3"), ("2", "2"), ("3", "1")]
+
+    def test_list_changes_nothing(self, three_runs: tuple[Path, ...]) -> None:
+        one, two, three = three_runs
+        assert main(["undo", "--list"]) == 0
+        assert (three / "Images" / "c.jpg").exists()
+        assert not (three / "c.jpg").exists()
+        assert [len(run.entries) for run in journal.load_runs()] == [1, 2, 3]
+
+    def test_empty_journal(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["undo", "--list"]) == 0
+        assert "Журнал перемещений пуст." in capsys.readouterr().out
+
+    def test_list_with_number_is_usage_error(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["undo", "--list", "2"])
+        assert info.value.code == 2
+        assert "вместе" in capsys.readouterr().err
+
+    def test_help_mentions_list(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as info:
+            main(["undo", "--help"])
+        assert info.value.code == 0
+        assert "--list" in capsys.readouterr().out
