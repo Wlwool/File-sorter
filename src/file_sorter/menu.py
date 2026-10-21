@@ -53,6 +53,9 @@ _UNDO_WARNING = (
     "(file-sorter service stop): иначе она заново отсортирует возвращённые файлы."
 )
 
+_YES = ("д", "да", "y", "yes")
+_NO = ("н", "нет", "n", "no")
+
 _MODES = {"1": "system", "2": "subfolders", "3": "custom"}
 _SERVICE_ACTIONS = {"2": "start", "3": "stop", "4": "status", "5": "uninstall"}
 
@@ -70,6 +73,26 @@ def _choose(
         if answer in valid:
             return answer
         print("Нет такого пункта. Введите число из списка.")
+
+
+def ask_yes_no(ask: Ask, question: str, *, default: bool = True) -> bool:
+    """Вопрос "да или нет". Enter - ответ по умолчанию.
+    Конец ввода (Ctrl+D, закрытый stdin) и Ctrl+C считаются ответом "нет".
+    """
+    hint = "Д/н" if default else "д/Н"
+    while True:
+        try:
+            answer = ask(f"{question} [{hint}]: ").strip().lower()
+        except EOFError, KeyboardInterrupt:
+            print()
+            return False
+        if not answer:
+            return default
+        if answer in _YES:
+            return True
+        if answer in _NO:
+            return False
+        print("Ответьте д (да) или н (нет).")
 
 
 def _ask_folder(ask: Ask, question: str) -> list[str]:
