@@ -9,6 +9,7 @@
 
 ---
 Linux
+
 <img src="docs/images/demo-linux.png" alt="Демонстрация работы" width="700">
 
 Windows
