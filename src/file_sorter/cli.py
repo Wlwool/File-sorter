@@ -26,6 +26,7 @@ from file_sorter.sorter import (
     SortReport,
     SortResult,
     resolve_destination,
+    sort_file,
     sort_folder,
 )
 from file_sorter.undo import (
@@ -237,7 +238,49 @@ def _remember(results: Iterable[SortResult], *, dry_run: bool) -> None:
         )
 
 
-def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool) -> int:
+def _retry_busy(
+    report: SortReport, config: Config, resolve: Resolver, ask: menu.Ask
+) -> None:
+    """Предлагает повторить занятые файлы, пока юзер согласен.
+    Перемещённые при повторе файлы переходят из failed в moved отчёта.
+    """
+    while busy := [item for item in report.failed if item.busy]:
+        print()
+        print("Не удалось переместить: файл занят другой программой.")
+        for item in busy:
+            print(f"  {item.path.name}")
+        print("Закройте программу, которая держит файл, и повторите.")
+        if not menu.ask_yes_no(ask, "Повторить для этих файлов?"):
+            print("Файлы остались на месте. Разобрать папку можно ещё раз позже.")
+            return
+        report.failed = [item for item in report.failed if item not in busy]
+        for item in busy:
+            result = sort_file(item.path, config, resolve)
+            match result:
+                case Moved():
+                    report.moved.append(result)
+                    print(_moved_text(result, dry_run=False))
+                case Failed():
+                    report.failed.append(result)
+                    print(
+                        f"[X] Ошибка: {result.path.name}: {result.message}",
+                        file=sys.stderr,
+                    )
+                case Skipped():
+                    pass  # тип файла не менялся, сюда попасть нельзя
+    print()
+    print(f"Итого перемещено: {len(report.moved)}, ошибок: {len(report.failed)}")
+
+
+def _do_clean(
+    source: Path,
+    config: Config,
+    resolve: Resolver,
+    *,
+    dry_run: bool,
+    retry_ask: menu.Ask | None = None,
+) -> int:
+    """retry_ask задан только в меню: там есть человек, которого можно спросить."""
     try:
         report = sort_folder(source, config, resolve, dry_run=dry_run)
     except OSError as error:
@@ -245,6 +288,8 @@ def _do_clean(source: Path, config: Config, resolve: Resolver, *, dry_run: bool)
         return 2
     print()
     _print_report(report, dry_run=dry_run)
+    if retry_ask is not None and not dry_run:
+        _retry_busy(report, config, resolve, retry_ask)
     _remember(report.moved, dry_run=dry_run)
     return 1 if report.failed else 0
 
@@ -502,14 +547,18 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Точка входа. Коды выхода: 0 - успех, 1 - были ошибки, 2 - неверный запуск."""
+def main(
+    argv: Sequence[str] | None = None, *, retry_ask: menu.Ask | None = None
+) -> int:
+    """Точка входа. Коды выхода: 0 - успех, 1 - были ошибки, 2 - неверный запуск.
+    retry_ask: чем спрашивать про повтор занятых файлов (его передаёт меню).
+    """
     _use_utf8_output()
     parser, commands = build_parser()
     args = parser.parse_args(argv)
     match args.command:
         case "clean":
-            clean = partial(_do_clean, dry_run=args.dry_run)
+            clean = partial(_do_clean, dry_run=args.dry_run, retry_ask=retry_ask)
             return _run_command(args, commands["clean"], clean)
         case "watch":
             if args.settle < 0:
@@ -534,6 +583,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if chosen is None:
                     return 0
                 print(f"\nЗапускаю: file-sorter {shlex.join(chosen)}\n")
-                return main(chosen)
+                return main(chosen, retry_ask=input)
             parser.print_help()
             return 0

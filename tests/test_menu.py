@@ -168,3 +168,51 @@ def test_history_bad_number_is_explained(
 ) -> None:
     menu.ask_arguments(scripted("6", "2", "0", "1"))
     assert "Введите целое число" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("д", True),
+        ("да", True),
+        ("Д", True),
+        ("y", True),
+        ("н", False),
+        ("нет", False),
+        ("Н", False),
+        ("n", False),
+        ("", True),
+        ("  д  ", True),
+    ],
+)
+def test_ask_yes_no_understands_answers(answer: str, expected: bool) -> None:
+    assert menu.ask_yes_no(scripted(answer), "Повторить?") is expected
+
+
+def test_ask_yes_no_default_can_be_no() -> None:
+    assert menu.ask_yes_no(scripted(""), "Повторить?", default=False) is False
+
+
+def test_ask_yes_no_asks_again_on_garbage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert menu.ask_yes_no(scripted("может", "12", "н"), "Повторить?") is False
+    assert "Ответьте" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
+def test_ask_yes_no_interrupted_input_means_no(error: type[BaseException]) -> None:
+    assert menu.ask_yes_no(raising(error), "Повторить?") is False
+
+
+def test_ask_yes_no_shows_hint_with_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts: list[str] = []
+
+    def ask(prompt: str) -> str:
+        prompts.append(prompt)
+        return "н"
+
+    menu.ask_yes_no(ask, "Повторить?")
+    assert prompts == ["Повторить? [Д/н]: "]
